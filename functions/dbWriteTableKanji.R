@@ -1,5 +1,5 @@
 dbWriteTableKanji <-
-function(conn,datname,df,...){
+function(conn,datname,df,overwrite =FALSE,...){
   #### 在数据库里写入含中文的表
   # conn: 数据库连接
   # datname: 打算在数据库里创建的新表的名称，注意不可以和已有的数据库中的表重名
@@ -26,7 +26,7 @@ function(conn,datname,df,...){
       names(df)<-toutf8(names(df))
       df<-df[ , lapply(.SD, toutf8)]
       dbGetQuery(conn, "set NAMES utf8")# 使保存时中文不乱码
-      dbWriteTable(conn,datname,df,...)
+      dbWriteTable(conn,datname,df,overwrite = overwrite,...)
       dbSendQuery(conn, "SET NAMES GBK")# 使读取时中文不乱码
     }
   }else{
