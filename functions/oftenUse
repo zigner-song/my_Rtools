@@ -1,0 +1,320 @@
+# packages =======
+
+library(dplyr)
+library(tidyr)
+library(magrittr)
+library(stringr)
+library(knitr)
+library(doBy)
+library(effsize)
+library(ggplot2)
+library(scorecard)
+library(caret)
+library(formattable)
+#library(psych)
+
+multi.merge <- function(data.list,...){
+  dt <- Reduce(function(x, y) merge(x, y, all=TRUE,...), data.list)
+  return(dt)
+}
+
+write.list <- function(mylist, fileName) {
+  lapply(mylist, function(x) {
+    write.csv(x, fileName, append = T,row.names = F)
+  })
+}
+
+arclogit<-function(x){1/(1+exp(-x))}
+logit <- function(x){log(x/(1-x))}
+
+ggroc <- function(predval,trueval,auc_text_x = 0.75,auc_text_y = 0.25){
+  library(plotROC);library(ggplot2)
+  basic_roc<-
+    ggplot(data.frame(D=trueval,
+                      P=predval),
+           aes(d=D,m=P))+
+    geom_roc()+style_roc(theme = theme_grey)
+  
+  basic_roc <-
+    basic_roc +
+    annotate('text',x=auc_text_x,y=auc_text_y,label=paste('AUC = ', calc_auc(basic_roc)$AUC %>% round(3)))
+  
+  return(basic_roc)
+  
+}
+AUC <- function(pred,depvar){
+  require("ROCR")
+  p   <- prediction(as.numeric(pred),depvar)
+  auc <- performance(p,"auc")
+  auc <- unlist(slot(auc, "y.values"))
+  return(auc)
+}
+KS <- function(pred,depvar){
+  require("ROCR")
+  p   <- prediction(as.numeric(pred),depvar)
+  perf <- performance(p, "tpr", "fpr")
+  ks <- max(attr(perf, "y.values")[[1]] - (attr(perf, "x.values")[[1]]))
+  return(ks)
+}
+
+
+####################   PlotKS_N ################################
+PlotKS_N<-function(Pred_Var, labels_Var, descending=1, N=1000){
+  # Pred_Var is prop: descending=1
+  # Pred_Var is score: descending=0
+  #Pred_Var <- pred.light.test;labels_Var=true.light.test
+  library(dplyr)
+  
+  df<- data.frame(Pred=Pred_Var, labels=labels_Var)
+  
+  if (descending==1){
+    df1<-arrange(df, desc(Pred), labels)
+  }else if (descending==0){
+    df1<-arrange(df, Pred, labels)
+  }
+  
+  df1$good1<-ifelse(df1$labels==0,1,0)
+  df1$bad1<-ifelse(df1$labels==1,1,0)
+  df1$cum_good1<-cumsum(df1$good1)
+  df1$cum_bad1<-cumsum(df1$bad1)
+  df1$rate_good1<-df1$cum_good1/sum(df1$good1)
+  df1$rate_bad1<-df1$cum_bad1/sum(df1$bad1)
+  
+  if (descending==1){
+    df2<-arrange(df, desc(Pred), desc(labels))
+  }else if (descending==0){
+    df2<-arrange(df, Pred, desc(labels))
+  }
+  
+  df2$good2<-ifelse(df2$labels==0,1,0)
+  df2$bad2<-ifelse(df2$labels==1,1,0)
+  df2$cum_good2<-cumsum(df2$good2)
+  df2$cum_bad2<-cumsum(df2$bad2)
+  df2$rate_good2<-df2$cum_good2/sum(df2$good2)
+  df2$rate_bad2<-df2$cum_bad2/sum(df2$bad2)
+  
+  rate_good<-(df1$rate_good1+df2$rate_good2)/2
+  rate_bad<-(df1$rate_bad1+df2$rate_bad2)/2
+  df_ks<-data.frame(rate_good,rate_bad)
+  
+  df_ks$KS<-df_ks$rate_bad-df_ks$rate_good
+  
+  L<- nrow(df_ks)
+  if (N>L) N<- L
+  df_ks$tile<- 1:L
+  qus<- quantile(1:L, probs = seq(0,1, 1/N))[-1]
+  qus<- ceiling(qus)
+  df_ks<- df_ks[df_ks$tile%in%qus,]
+  df_ks$tile<- df_ks$tile/L
+  df_0<-data.frame(rate_good=0,rate_bad=0,KS=0,tile=0)
+  df_ks<-rbind(df_0, df_ks)
+  
+  M_KS<-max(df_ks$KS)
+  Pop<-df_ks$tile[which(df_ks$KS==M_KS)]
+  M_good<-df_ks$rate_good[which(df_ks$KS==M_KS)]
+  M_bad<-df_ks$rate_bad[which(df_ks$KS==M_KS)]
+  
+  library(ggplot2)
+  PlotKS<-ggplot(df_ks)+
+    geom_line(aes(tile,rate_bad),colour="red2",size=1.2)+
+    geom_line(aes(tile,rate_good),colour="blue3",size=1.2)+
+    geom_line(aes(tile,KS),colour="forestgreen",size=1.2)+
+    
+    geom_vline(xintercept=Pop,linetype=2,colour="gray",size=0.6)+
+    geom_hline(yintercept=M_KS,linetype=2,colour="forestgreen",size=0.6)+
+    geom_hline(yintercept=M_good,linetype=2,colour="blue3",size=0.6)+
+    geom_hline(yintercept=M_bad,linetype=2,colour="red2",size=0.6)+
+    
+    annotate("text", x = 0.5, y = 1.05, label=paste("KS=", round(M_KS, 4), "at Pop=", round(Pop, 4)), size=4, alpha=0.8)+
+    
+    scale_x_continuous(breaks=seq(0,1,.2))+
+    scale_y_continuous(breaks=seq(0,1,.2))+
+    
+    xlab("of Total Population")+
+    ylab("of Total Bad/Good")+
+    
+    ggtitle(label="KS - Chart")+
+    
+    theme_bw()+
+    
+    theme(
+      plot.title=element_text(colour="gray24",size=12,face="bold"),
+      plot.background = element_rect(fill = "gray90"),
+      axis.title=element_text(size=10),
+      axis.text=element_text(colour="gray35")
+    )
+  
+  result<-list(M_KS=M_KS,Pop=Pop,PlotKS=PlotKS,df_ks=df_ks)
+  return(result)
+}
+
+
+dbWriteTableKanji <-
+  function(conn,datname,df,...){
+    #### 在数据库里写入含中文的表
+    # conn: 数据库连接
+    # datname: 打算在数据库里创建的新表的名称，注意不可以和已有的数据库中的表重名
+    # df：打算保存的表，需要是data.frame格式
+    
+    if(is.data.frame(df)){
+      if(!require(stringi)){install.packages('stringi')}
+      if(!require(data.table)){install.packages('data.table')}
+      
+      toutf8 <- function(x) {
+        x[is.na(x)]<-''
+        if (is.factor(x)) {
+          x <- as.character(x)
+        }
+        if (is.character(x)) {
+          if (!all(stri_enc_isutf8(x))) {
+            x <- stri_encode(x, "", "UTF-8")
+          }
+          Encoding(x) <- "utf8"
+        }
+        return(x)
+      }
+      df<-as.data.table(df)
+      if(Sys.info()[["sysname"]]=="Windows"){
+        names(df)<-toutf8(names(df))
+        df<-df[ , lapply(.SD, toutf8)]
+        dbGetQuery(conn, "set NAMES utf8")# 使保存时中文不乱码
+        dbWriteTable(conn,datname,df,...)
+        
+        dbSendQuery(conn, "SET NAMES GBK")# 使读取时中文不乱码
+      }
+    }else{
+      warning('df need to be a data.frame')
+    }
+  }
+
+sql2txt <- function(file){
+  txt<-readLines('my.sql',warn=FALSE) %>% paste(.,collapse = ' ')
+  return(txt)
+}
+
+
+ym <- function(x){
+  x<-x %>% as.Date()
+  m <- format(x,format = '%Y-%m') %>% as.character()
+  m <- paste(m,'-01',sep='') %>% as.Date()
+  m <- format(m,format = '%Y-%m')
+  return(m)
+}
+
+
+plotROC <- function(.data, predict_col, target, group, positive=1, all=TRUE){
+  if(!(require(tidyverse) & require(plotROC))){
+    stop("--> tidyverse and plotROC packages are required..")
+  }
+  predict_col <- enquo(predict_col)
+  target <- enquo(target)
+  group <- enquo(group)
+  predictN <- quo_name(predict_col)
+  groupN <- quo_name(group)
+  df <- .data %>% dplyr::select(!! predict_col, !! target, !! group) %>%
+    mutate(targetN = ifelse(!! target == positive, 1, 0)) %>% as.data.frame()
+  if (all){
+    df2 <- df
+    df2[, groupN] <- "ALL"
+    df <- rbind(df, df2)
+  }
+  p <- df %>% ggplot(aes_string(m = predictN,
+                                d = "targetN",
+                                color = groupN)) + geom_roc(show.legend = TRUE, labels=FALSE)
+  p <- p + style_roc(theme = theme_grey)#ggpubr::theme_classic2()
+  ng <- levels(factor(df[, groupN]))
+  if(length(ng) == 3){
+    auc <- calc_auc(p)$AUC
+    names(auc) <- ng
+    auc <- base::sort(auc, decreasing = TRUE)
+    p <- p + annotate("text", x = .75, y = .25,
+                      label = paste(names(auc)[1], " AUC =", round(auc[1], 3), "\n",
+                                    names(auc)[2], " AUC =", round(auc[2], 3), "\n",
+                                    names(auc)[3], " AUC =", round(auc[3], 3), "\n"),
+                      size = 6)
+  } else {
+    auc <- calc_auc(p)$AUC
+    names(auc) <- ng
+    auc <- base::sort(auc, decreasing = TRUE)
+    p <- p + annotate("text", x = .65, y = .25,
+                      label = paste(names(auc)[1], " AUC =", round(auc[1], 3), "\n",
+                                    names(auc)[2], " AUC =", round(auc[2], 3), "\n")#,
+                      #size = 6
+    )
+  }
+  p + xlab("False Positive Fraction") + ylab("True Positive Fraction") +
+    scale_x_continuous(expand = c(0, 0)) + scale_y_continuous(expand = c(0, 0))
+}
+
+
+
+mydistinct <- function(df,key,type = 'all',subkey = NULL,notuse_key = NULL,sep='|'){
+  #df<-dat_bankaccount_fk_201808[c("ACTUAL_CONTROLLER","LEGAL_PERSON_NAME","DEALER" )] %>% distinct()
+  
+  df %<>% distinct()
+  df <- data.frame(lapply(df, as.character), stringsAsFactors=FALSE)
+  #key='DEALER'
+  
+  if(type == 'first'){
+    df$ins_id <- 1:nrow(df)
+    fml <- paste('ins_id~',key %>% paste(collapse = '+'),sep='') %>% as.formula()
+    
+    
+    df2 <- summaryBy(fml,df,FUN=min,keep.names = T)
+    out_df <- subset(df,ins_id %in% df2$ins_id)
+    out_df %<>% subset(select = names(out_df) %>% setdiff('ins_id'))
+  } else if(type=='all'){
+    variables <- names(df) %>% setdiff(key)
+    fml <- paste(variables %>% paste(collapse = '+'),
+                 key %>% paste(collapse = '+'),
+                 sep='~') %>% 
+      as.formula()
+    ins_fun <- function(x){
+      
+      x %<>% sort %<>% unique() %>%  subset(.,.!='')
+      xx<-paste(x,collapse = sep)
+      return(xx)
+    }
+    out_df <- summaryBy(fml,df,FUN=ins_fun,keep.names = T)
+    
+    
+  } else if(type =='last'){
+    df$ins_id <- 1:nrow(df)
+    fml <- paste('ins_id~',key %>% paste(collapse = '+'),sep='') %>% as.formula()
+    
+    
+    df2 <- summaryBy(fml,df,FUN=max,keep.names = T)
+    out_df <- subset(df,ins_id %in% df2$ins_id)
+    out_df %<>% subset(select = names(out_df) %>% setdiff('ins_id'))
+  } else if(type=='total'){
+    variables <- names(df) %>% setdiff(key)
+    fml <- paste(variables %>% paste(collapse = '+'),
+                 key %>% paste(collapse = '+'),
+                 sep='~') %>% 
+      as.formula()
+    ins_fun <- function(x){
+      xx<-paste(x,collapse = sep)
+      return(xx)
+    }
+    df2 <- summaryBy(fml,df,FUN=ins_fun,keep.names = T)
+    df2 -> out_df
+  }
+  return(out_df)
+}
+
+
+logit <- function(x){
+  y <- log(x/(1-x))
+  return(y)
+}
+#my_mean <-function(x){mean(x==1)}
+
+simplifyString <- function(x,sep='\\|'){
+  #x='a|a|yy'
+  xx<-str_split(x,sep) %>% unlist %>% unique %>% sort
+  xx<-subset(xx,xx!='')
+  xx <- paste(xx,collapse = '|')
+  return(xx)
+  
+}
+
